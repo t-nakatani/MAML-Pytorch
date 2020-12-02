@@ -119,33 +119,30 @@ class MiniImagenet(Dataset):
         self.support_x_batch = []  # support set batch
         self.query_x_batch = []  # query set batch
         df = pd.read_csv('flower.csv')
-        df_ = pd.read_csv('flower_natural.csv')
         pres = list(df.groupby('pre').count()['fname'].index)
         selected_flower = pres[idx]
         dic = df.groupby('pre').count()['fname'].to_dict()
-        dic_ = df_.groupby('pre').count()['fname'].to_dict()
 
         support_x = []
         query_x = []
 
-            # 2. select 1_shot + (filesize)_query for each class
-        selected_imgs_idx = np.random.choice(dic[selected_flower]//2, 1, False)
-        selected_imgs_idx_ = np.random.choice(dic_[selected_flower], dic_[selected_flower], False)
-        np.random.shuffle(selected_imgs_idx_)
+            # 2. select 1_shot + (filesize-1)_query for each class
+        selected_imgs_idx = np.random.choice(dic[selected_flower]//2, dic[selected_flower]//2, False)
+        np.random.shuffle(selected_imgs_idx)
+        info = ['flower: '+selected_flower] + list(selected_imgs_idx.astype(str)) + ['\n']
         
-        indexDtrain = np.array(selected_imgs_idx[0])  # idx for Dtrain
-        indexDtest = np.array(selected_imgs_idx_[:])  # idx for Dtest
-        support_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtrain, indexDtrain+dic[selected_flower]//2], 0]))
+        indexDtrain = np.array(selected_imgs_idx[:1])  # idx for Dtrain
+        indexDtest = np.array(selected_imgs_idx[1:])  # idx for Dtest
+        support_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtrain[0], indexDtrain[0]+dic[selected_flower]//2], 0]))
         random.shuffle(support_x[-1])
-#         print(selected_flower, dic_[selected_flower])
-        for i in range(dic_[selected_flower]):
-            query_x.append((df_[df_['pre'] == selected_flower].iloc[indexDtest[i], 0]))
-        random.shuffle(query_x)
+        for i in range(dic[selected_flower]//2 - 1):
+            query_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtest[i], indexDtest[i]+dic[selected_flower]//2], 0]))
+            random.shuffle(query_x[-1])
 
         self.support_x_batch.append(support_x)  # append set to current sets
-        self.query_x_batch.append([query_x])  # append sets to current sets
-        with open('data/log_query.txt', mode='a') as f:
-            f.write(','.join(query_x + ['\n']))
+        self.query_x_batch.append(query_x)  # append sets to current sets
+        if idx == 0:
+            print(query_x)
     def __getitem__(self, index):
         """
         index means index of sets, 0<= index <= batchsz-1
@@ -157,15 +154,11 @@ class MiniImagenet(Dataset):
         # [setsz]
         support_y = np.zeros((self.setsz), dtype=np.int)
         # [querysz, 3, resize, resize]
-        if self.k_query > 1:
-            query_x = torch.FloatTensor(self.querysz//self.n_way, 3, self.resize, self.resize)
-        else:
-            query_x = torch.FloatTensor(self.querysz, 3, self.resize, self.resize)
+        query_x = torch.FloatTensor(self.querysz, 3, self.resize, self.resize)
         # [querysz]
         query_y = np.zeros((self.querysz), dtype=np.int)
         
-        path = './flower/images/'
-        flatten_support_x = [os.path.join(path, item)
+        flatten_support_x = [os.path.join(self.path, item)
                              for sublist in self.support_x_batch[index] for item in sublist]
 
         support_y = np.array([int(re.findall('.+_(\d+).png', item)[0]) % 2 for sublist in self.support_x_batch[index] for item in sublist])
@@ -178,14 +171,13 @@ class MiniImagenet(Dataset):
         random.shuffle(unique)
         # relative means the label ranges from 0 to n-way
         support_y_relative = np.zeros(self.setsz)
-        query_y_relative = np.zeros(len(query_y)) #fit size of query_y_relative to one of query_y
-#         query_y_relative = np.zeros(self.querysz)
+        query_y_relative = np.zeros(self.querysz)
         for idx, l in enumerate(unique):
             support_y_relative[support_y == l] = idx
             query_y_relative[query_y == l] = idx
 
         # print('relative:', support_y_relative, query_y_relative)
-#         print((flatten_query_x))
+
         for i, path in enumerate(flatten_support_x):
             support_x[i] = self.transform(path)
 

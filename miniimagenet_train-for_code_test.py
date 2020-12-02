@@ -25,11 +25,8 @@ def main():
     np.random.seed(222)
     df = pd.read_csv('flower.csv')
     df_ = pd.read_csv('flower_natural.csv')
-    pres = list(df.groupby('pre').count()['fname'].index)
-#     size_list = list(df.groupby('pre').count()['fname'])
-#     size_list_ = list(df_.groupby('pre').count()['fname'])
-    dic = df.groupby('pre').count()['fname'].to_dict()
-    dic_ = df_.groupby('pre').count()['fname'].to_dict()
+    size_list = list(df.groupby('pre').count()['fname'])
+    size_list_ = list(df_.groupby('pre').count()['fname'])
 
     print(args)
 
@@ -70,12 +67,10 @@ def main():
                              k_query=args.k_qry,
                              batchsz=100, resize=args.imgsz)
     mini_predict = [MiniImagenet('./flower_natural/', mode='pred', n_way=args.n_way, k_shot=args.k_spt,
-                             k_query=dic_[pre],
-                             batchsz=1, resize=args.imgsz, idx = i) for i, pre in enumerate(pres)]
+                             k_query=size_list_[i],
+                             batchsz=1, resize=args.imgsz, idx = i) for i, size in enumerate(size_list)]
     accs_list_tr = []
     accs_list_ts = []
-    ###############################
-    ###############################
     for epoch in range(args.epoch//10000):
         # fetch meta_batchsz num of episode each time
         db = DataLoader(mini, args.task_num, shuffle=True, num_workers=1, pin_memory=True)
@@ -105,7 +100,7 @@ def main():
                 print('step:', step, '\ttest acc:', accs)
                 accs_list_ts.append(accs)
                 
-    for j in range(len(pres)):
+    for j in range(len(size_list)):
         db_pred = DataLoader(mini_predict[j], 1, shuffle=True, num_workers=1, pin_memory=True)
         for x_spt, y_spt, x_qry, y_qry in db_pred:
             x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), \
@@ -119,7 +114,7 @@ def main():
 if __name__ == '__main__':
 
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--epoch', type=int, help='epoch number', default=30000)
+    argparser.add_argument('--epoch', type=int, help='epoch number', default=10000)
     argparser.add_argument('--n_way', type=int, help='n way', default=2)
     argparser.add_argument('--k_spt', type=int, help='k shot for support set', default=1)
     argparser.add_argument('--k_qry', type=int, help='k shot for query set', default=1)
