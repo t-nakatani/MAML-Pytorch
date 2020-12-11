@@ -34,6 +34,7 @@ class Meta(nn.Module):
 
 
         self.net = Learner(config, args.imgc, args.imgsz)
+        self.net = torch.nn.DataParallel(self.net)
         self.meta_optim = optim.Adam(self.net.parameters(), lr=self.meta_lr)
 
 

@@ -9,9 +9,8 @@ import csv
 import random
 import pandas as pd
 import re
-import random
 
-class MiniImagenet(Dataset):
+class MiniImagenet2(Dataset):
     """
     put mini-imagenet files as :
     root :
@@ -45,8 +44,8 @@ class MiniImagenet(Dataset):
         self.querysz = self.n_way * self.k_query  # number of samples per set for evaluation
         self.resize = resize  # resize to
         self.startidx = startidx  # index label not from 0, but from startidx
-        print('shuffle DB :%s, b:%d, %d-way, %d-shot, %d-query, resize:%d' % (
-        mode, batchsz, n_way, k_shot, k_query, resize))
+#         print('shuffle DB :%s, b:%d, %d-way, %d-shot, %d-query, resize:%d' % (
+#         mode, batchsz, n_way, k_shot, k_query, resize))
 
         if mode == 'train':
             self.transform = transforms.Compose([lambda x: Image.open(x).convert('RGB'),
@@ -65,12 +64,10 @@ class MiniImagenet(Dataset):
 
         self.path = os.path.join(root, 'images')  # image path
         self.cls_num = 2
-        self.mode = mode
-        self.df_spt = pd.read_csv('support_set.csv')
-        self.df_qry = pd.read_csv('query_set.csv')
-        self.dic_spt = dict([(fname, label)for fname, label in zip(self.df_spt['fname'], self.df_spt['label'])])
-        self.dic_qry = dict([(fname, label)for fname, label in zip(self.df_qry['fname'], self.df_qry['label'])])
-        self.create_batch(self.batchsz, mode)
+        if mode == 'pred':
+            self.create_batch_for_predict(idx)
+        else:
+            self.create_batch(self.batchsz, mode)
 
     def create_batch(self, batchsz, mode):
         """
@@ -81,65 +78,82 @@ class MiniImagenet(Dataset):
         """
         self.support_x_batch = []  # support set batch
         self.query_x_batch = []  # query set batch
-        if mode == 'train':
-            df_spt = self.df_spt[self.df_spt['tr/ts'] == 'tr']
-            df_qry = self.df_qry[self.df_qry['tr/ts'] == 'tr']
-        elif mode == 'test':
-            df_spt = self.df_spt[self.df_spt['tr/ts'] == 'ts']
-            df_qry = self.df_qry[self.df_qry['tr/ts'] == 'ts']
-        else: 
-            print('===invalid mode===', mode)
-        pres = df_spt['pre'].unique()
+        df = pd.read_csv('flower.csv')
+        pres = df['pre'].unique()
+        from sklearn.model_selection import train_test_split
+        pres_tr, pres_ts = train_test_split(pres, random_state=0)
+        dic = df.groupby('pre').count()['fname'].to_dict()
+        if mode == 'train': pres = pres_tr
+        else: pres = pres_ts
+        print('===train_test_split===')
         for b in range(batchsz):  # for each batch
             # 1.select n_way classes randomly
-            support_x = [] # ex) [['0_10.png', '0_12.png'], ['0_0.png', '0_2.png']]
+            support_x = []
             query_x = []
-            while(True):
-                selected_flower = np.random.choice(pres)
-                if selected_flower != '182':
-                    break
-            df_tmp_s = df_spt[df_spt['pre'] == selected_flower]
-            df_tmp_q = df_qry[df_qry['pre'] == selected_flower]
-            candi_s0 = list(df_tmp_s[df_tmp_s['label'] == 0]['fname'])
-            candi_q0 = list(df_tmp_q[df_tmp_q['label'] == 0]['fname'])
-            candi_s1 = list(df_tmp_s[df_tmp_s['label'] == 1]['fname'])
-            candi_q1 = list(df_tmp_q[df_tmp_q['label'] == 1]['fname'])
-
+            selected_flower = np.random.choice(pres)
                 # 2. select k_shot + k_query for each class
-            try:
-
-                selected_imgs_qry0 = random.sample(candi_q0, self.k_query)
-                selected_imgs_spt0 = random.sample(candi_s0, self.k_shot)
-                selected_imgs_qry1 = random.sample(candi_q1, self.k_query)
-                selected_imgs_spt1 = random.sample(candi_s1, self.k_query)
-            except:
-                print(selected_flower)
-            
-            np.random.shuffle(selected_imgs_spt0) # いらん気がする
-            np.random.shuffle(selected_imgs_qry0)
-            np.random.shuffle(selected_imgs_spt1)
-            np.random.shuffle(selected_imgs_qry1)
-            for k in range(self.k_shot):
-                support_x.append([selected_imgs_spt0[k], selected_imgs_spt1[k]])
-                random.shuffle(support_x[-1])
-            for k in range(self.k_query):
-                query_x.append([selected_imgs_qry0[k], selected_imgs_qry1[k]])
-                random.shuffle(query_x[-1])
+            selected_imgs_idx = np.random.choice(dic[selected_flower]//2, self.k_shot + self.k_query, False)
+            np.random.shuffle(selected_imgs_idx)
+            indexDtrain = np.array(selected_imgs_idx[:self.k_shot])  # idx for Dtrain
+            indexDtest = np.array(selected_imgs_idx[self.k_shot:])  # idx for Dtest
+            support_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtrain[0], indexDtrain[0]+dic[selected_flower]//2], 0]))
+            random.shuffle(support_x[-1])
+            query_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtest[0], indexDtest[0]+dic[selected_flower]//2], 0]))
+            random.shuffle(query_x[-1])
 #             break
 
             # shuffle the correponding relation between support set and query set
-            random.shuffle(support_x)
-            random.shuffle(query_x)
+#             random.shuffle(support_x[0])
+#             random.shuffle(query_x[0])
 
             self.support_x_batch.append(support_x)  # append set to current sets
             self.query_x_batch.append(query_x)  # append sets to current sets
+            
+    def create_batch_for_predict(self, idx):
+        """
+        create batch for meta-learning.
+        ×episode× here means batch, and it means how many sets we want to retain.
+        :param episodes: batch size
+        :return:
+        """
+        self.support_x_batch = []  # support set batch
+        self.query_x_batch = []  # query set batch
+        df = pd.read_csv('flower.csv')
+        df_ = pd.read_csv('flower_natural_with_label.csv')
+        df_ = df_[df_['label'] != '-']
+        pres = list(df.groupby('pre').count()['fname'].index)
+        selected_flower = pres[idx]
+        dic = df.groupby('pre').count()['fname'].to_dict()
+        dic_ = df_.groupby('pre').count()['fname'].to_dict()
 
+        support_x = []
+        query_x = []
+
+            # 2. select 1_shot + (filesize)_query for each class
+        selected_imgs_idx = np.random.choice(dic[selected_flower]//2, 1, False)
+        selected_imgs_idx_ = np.arange(dic_[selected_flower])
+        
+        indexDtrain = np.array(selected_imgs_idx[0])  # idx for Dtrain
+        indexDtest = np.array(selected_imgs_idx_[:])  # idx for Dtest
+        support_x.append(list(df[df['pre'] == selected_flower].iloc[[indexDtrain, indexDtrain+dic[selected_flower]//2], 0]))
+        random.shuffle(support_x[-1])
+#         print(selected_flower, dic_[selected_flower])
+        for i in range(dic_[selected_flower]):
+            query_x.append((df_[df_['pre'] == selected_flower].iloc[indexDtest[i], 0]))
+#         random.shuffle(query_x)
+
+        self.support_x_batch.append(support_x)  # append set to current sets
+        self.query_x_batch.append([query_x])  # append sets to current sets
+#         with open('data/log_query.txt', mode='a') as f:
+#             f.write(','.join(query_x + ['\n']))
     def __getitem__(self, index):
         """
         index means index of sets, 0<= index <= batchsz-1
         :param index:
         :return:
         """
+        df_ = pd.read_csv('flower_natural_with_label.csv')
+        df_ = df_[df_['label'] != '-']
         # [setsz, 3, resize, resize]
         support_x = torch.FloatTensor(self.setsz, 3, self.resize, self.resize)
         # [setsz]
@@ -152,16 +166,20 @@ class MiniImagenet(Dataset):
         # [querysz]
         query_y = np.zeros((self.querysz), dtype=np.int)
         
-        path1 = './flower_drop/images/'
-        path2 = './flower_natural2_drop/images/'
-        flatten_support_x = [os.path.join(path1, item)
+        path = './flower/images/'
+        flatten_support_x = [os.path.join(path, item)
                              for sublist in self.support_x_batch[index] for item in sublist]
+        support_y = np.array([int(re.findall('.+_(\d+).png', item)[0]) % 2 for sublist in self.support_x_batch[index] for item in sublist])
 
-        support_y = np.array([self.dic_spt[fname] for sublist in self.support_x_batch[index] for fname in sublist])
-
-        flatten_query_x = [os.path.join(path2, item)
+        flatten_query_x = [os.path.join(self.path, item)
                            for sublist in self.query_x_batch[index] for item in sublist]
-        query_y = np.array([self.dic_qry[fname] for sublist in self.query_x_batch[index] for fname in sublist])
+        query_y = np.array([0 if str(list(df_[df_['fname'] == item]['label'])[0]) == 'r' else 1 for sublist in self.query_x_batch[index] for item in sublist])
+        
+#         with open('data/log_qry_order.txt', mode='a') as f:
+#             f.write(re.findall('images/(.+)_', flatten_query_x[0])[0] + ',')
+#         print(flatten_query_x[0])
+        
+#         print(self.query_x_batch[index], query_y)
 
         unique = np.unique(support_y)
         random.shuffle(unique)

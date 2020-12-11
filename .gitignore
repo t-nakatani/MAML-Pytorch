@@ -7,4 +7,5 @@ data
 flower
 flower_natural
 runs
-
+*.png
+*.pkl

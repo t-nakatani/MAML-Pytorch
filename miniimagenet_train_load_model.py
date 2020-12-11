@@ -8,6 +8,7 @@ from    torch.optim import lr_scheduler
 import  random, sys, pickle
 import  argparse
 import pandas as pd
+import cloudpickle
 
 from meta import Meta
 
@@ -24,8 +25,8 @@ def main():
     torch.manual_seed(222)
     torch.cuda.manual_seed_all(222)
     np.random.seed(222)
-    df_spt = pd.read_csv('support_set.csv')
-    df_qry = pd.read_csv('query_set.csv')
+#     df_spt = pd.read_csv('support_set.csv')
+#     df_qry = pd.read_csv('query_set.csv')
 
     print(args)
 
@@ -51,53 +52,35 @@ def main():
     ]
     cuda = 'cuda:' + str(args.gpu_index)
     device = torch.device(cuda)
-    maml = Meta(args, config).to(device)
+    with open('model.pkl', 'rb') as f:
+        maml = cloudpickle.load(f).to(device)
+#     maml = Meta(args, config).to(device)
 
     tmp = filter(lambda x: x.requires_grad, maml.parameters())
     num = sum(map(lambda x: np.prod(x.shape), tmp))
-    print(maml)
+#     print(maml)
     print('Total trainable tensors:', num)
 
     # batchsz here means total episode number
-    mini = MiniImagenet('./flower/', mode='train', n_way=args.n_way, k_shot=args.k_spt,
-                        k_query=args.k_qry,
-                        batchsz=10000, resize=args.imgsz)
+#     mini = MiniImagenet('./flower/', mode='train', n_way=args.n_way, k_shot=args.k_spt,
+#                         k_query=args.k_qry,
+#                         batchsz=10000, resize=args.imgsz)
     mini_test = MiniImagenet('./flower/', mode='test', n_way=args.n_way, k_shot=args.k_spt,
                              k_query=args.k_qry,
                              batchsz=100, resize=args.imgsz)
-    accs_list_tr = []
-    accs_list_ts = []
-    for epoch in range(args.epoch//10000):
-        # fetch meta_batchsz num of episode each time
-        db = DataLoader(mini, args.task_num, shuffle=True, num_workers=1, pin_memory=True)
+    db_test = DataLoader(mini_test, 1, shuffle=True, num_workers=1, pin_memory=True)
+    accs_all_test = []
 
-        for step, (x_spt, y_spt, x_qry, y_qry) in enumerate(db):
-            x_spt, y_spt, x_qry, y_qry = x_spt.to(device), y_spt.to(device), x_qry.to(device), y_qry.to(device)
+    for x_spt, y_spt, x_qry, y_qry in db_test:
+        x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), \
+                                     x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
 
-            accs = maml(x_spt, y_spt, x_qry, y_qry)
+        accs = maml.finetunning(x_spt, y_spt, x_qry, y_qry)
+        accs_all_test.append(accs)
 
-            if step % 30 == 0:
-                print('step:', step, '\ttraining acc:', accs)
-                accs_list_tr.append(accs)
-
-            if step % 500 == 0 or (step == 10000//args.task_num - 1) & (epoch == range(args.epoch//10000)[-1]):  # evaluation
-                db_test = DataLoader(mini_test, 1, shuffle=True, num_workers=1, pin_memory=True)
-                accs_all_test = []
-
-                for x_spt, y_spt, x_qry, y_qry in db_test:
-                    x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), \
-                                                 x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
-
-                    accs = maml.finetunning(x_spt, y_spt, x_qry, y_qry)
-                    accs_all_test.append(accs)
-
-                # [b, update_step+1]
-                accs = np.array(accs_all_test).mean(axis=0).astype(np.float16)
-                print('step:', step, '\ttest acc:', accs)
-                accs_list_ts.append(accs)
-                if (step == 10000//args.task_num - 1) & (epoch == range(args.epoch//10000)[-1]):
-                    with open('data/acc/natural2(task_num_' + str(args.task_num) + ').txt', mode='a') as f:
-                        f.write(str(accs[-1]) + str(args.task_num) + '\n')
+    # [b, update_step+1]
+    accs = np.array(accs_all_test).mean(axis=0).astype(np.float16)
+    print('step:', step, '\ttest acc:', accs)
 
 
 if __name__ == '__main__':

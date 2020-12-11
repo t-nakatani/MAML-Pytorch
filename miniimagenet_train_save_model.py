@@ -1,13 +1,14 @@
 import  numpy as np
 import  torch, os
 from    MiniImagenet import MiniImagenet
+# from    MiniImagenet2 import MiniImagenet2
 import  scipy.stats
 from    torch.utils.data import DataLoader
 from    torch.optim import lr_scheduler
 import  random, sys, pickle
 import  argparse
 import pandas as pd
-
+import cloudpickle
 from meta import Meta
 
 
@@ -23,10 +24,8 @@ def main():
     torch.manual_seed(222)
     torch.cuda.manual_seed_all(222)
     np.random.seed(222)
-    df = pd.read_csv('flower.csv')
-    df_ = pd.read_csv('flower_natural.csv')
-    size_list = list(df.groupby('pre').count()['fname'])
-    size_list_ = list(df_.groupby('pre').count()['fname'])
+#     df_spt = pd.read_csv('support_set.csv')
+#     df_qry = pd.read_csv('query_set.csv')
 
     print(args)
 
@@ -50,8 +49,8 @@ def main():
         ('flatten', []),
         ('linear', [args.n_way, 32 * 5 * 5])
     ]
-
-    device = torch.device('cuda')
+    cuda = 'cuda:' + str(args.gpu_index)
+    device = torch.device(cuda)
     maml = Meta(args, config).to(device)
 
     tmp = filter(lambda x: x.requires_grad, maml.parameters())
@@ -66,9 +65,6 @@ def main():
     mini_test = MiniImagenet('./flower/', mode='test', n_way=args.n_way, k_shot=args.k_spt,
                              k_query=args.k_qry,
                              batchsz=100, resize=args.imgsz)
-    mini_predict = [MiniImagenet('./flower_natural/', mode='pred', n_way=args.n_way, k_shot=args.k_spt,
-                             k_query=size_list_[i],
-                             batchsz=1, resize=args.imgsz, idx = i) for i, size in enumerate(size_list)]
     accs_list_tr = []
     accs_list_ts = []
     for epoch in range(args.epoch//10000):
@@ -84,7 +80,7 @@ def main():
                 print('step:', step, '\ttraining acc:', accs)
                 accs_list_tr.append(accs)
 
-            if step % 500 == 0 or step == 10000//10 - 1:  # evaluation
+            if step % 500 == 0 or (step == 10000//args.task_num - 1) & (epoch == range(args.epoch//10000)[-1]):  # evaluation
                 db_test = DataLoader(mini_test, 1, shuffle=True, num_workers=1, pin_memory=True)
                 accs_all_test = []
 
@@ -99,32 +95,28 @@ def main():
                 accs = np.array(accs_all_test).mean(axis=0).astype(np.float16)
                 print('step:', step, '\ttest acc:', accs)
                 accs_list_ts.append(accs)
-                
-    for j in range(len(size_list)):
-        db_pred = DataLoader(mini_predict[j], 1, shuffle=True, num_workers=1, pin_memory=True)
-        for x_spt, y_spt, x_qry, y_qry in db_pred:
-            x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), \
-                                         x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
-            maml.predict(x_spt, y_spt, x_qry, y_qry, j)
-            
-#     pd.DataFrame(accs_list_tr).to_csv('data/acc_list_tr.csv', index = False, header = False)
-#     pd.DataFrame(accs_list_ts).to_csv('data/acc_list_ts.csv', index = False, header = False)
-#     maml.save_model()
+                if (step == 10000//args.task_num - 1) & (epoch == range(args.epoch//10000)[-1]):
+                    with open('data/result_natural(acc).txt', mode='a') as f:
+                        f.write(str(accs) + str(args.task_num) + '\n')
+                    with open('model.pkl', 'wb') as f:
+                        cloudpickle.dump(maml, f)
+
 
 if __name__ == '__main__':
 
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--epoch', type=int, help='epoch number', default=10000)
+    argparser.add_argument('--epoch', type=int, help='epoch number', default=30000)
     argparser.add_argument('--n_way', type=int, help='n way', default=2)
     argparser.add_argument('--k_spt', type=int, help='k shot for support set', default=1)
     argparser.add_argument('--k_qry', type=int, help='k shot for query set', default=1)
     argparser.add_argument('--imgsz', type=int, help='imgsz', default=84)
     argparser.add_argument('--imgc', type=int, help='imgc', default=3)
-    argparser.add_argument('--task_num', type=int, help='meta batch size, namely task num', default=10)
+    argparser.add_argument('--task_num', type=int, help='meta batch size, namely task num', default=50)
     argparser.add_argument('--meta_lr', type=float, help='meta-level outer learning rate', default=1e-3)
     argparser.add_argument('--update_lr', type=float, help='task-level inner update learning rate', default=0.01)
     argparser.add_argument('--update_step', type=int, help='task-level inner update steps', default=5)
     argparser.add_argument('--update_step_test', type=int, help='update steps for finetunning', default=10)
+    argparser.add_argument('--gpu_index', type=str, help='index of gpu', default=0)
 
     args = argparser.parse_args()
 
